@@ -37,13 +37,13 @@ export interface ConfigPlatformInterface extends PlatformConfig {
     discoveryTimeout?: string;
     entryDelay?: number;
   };
-  panels?: Panel;
+  panels?: Panel[];
 }
 
 interface Panel {
   name?: string;
   uuid?: string;
-  zones?: Zone;
+  zones?: Zone[];
 }
 
 interface Zone {

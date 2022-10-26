@@ -33,7 +33,7 @@ export const ZONES_TO_PINS = {
 };
 
 /**
- * For Zone Logic     
+ * For Zone Logic
  */
 export const ZONE_TYPES = {
   sensors: [
@@ -55,6 +55,12 @@ export const ZONE_TYPES = {
     'strobe',
     'switch',
   ],
+  interface: [
+    'arm_stay',
+    'arm_away',
+    'armed',
+    'triggered',
+  ],
 };
 
 export const TYPES_TO_ACCESSORIES = {
@@ -70,6 +76,10 @@ export const TYPES_TO_ACCESSORIES = {
   siren:          ['Switch',            'Siren'],                         // https://developers.homebridge.io/#/service/Switch
   strobe:         ['Switch',            'Strobe Light'],                  // https://developers.homebridge.io/#/service/Switch
   switch:         ['Switch',            'Generic Switch'],                // https://developers.homebridge.io/#/service/Switch
+  arm_stay:       ['Interface',         'Interface Switch'],
+  arm_away:       ['Interface',         'Interface Switch'],
+  armed:          ['Interface',         'Interface Switch'],
+  triggered:      ['Interface',         'Interface Switch'],
 };
 
 export const ALARM_NAMES_TO_NUMBERS = {

@@ -1,9 +1,10 @@
 import { API, DynamicPlatformPlugin, Logger, PlatformAccessory, PlatformConfig, Service, Characteristic } from 'homebridge';
 
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings';
-import { ZONES, ZONES_TO_PINS, ZONE_TYPES, TYPES_TO_ACCESSORIES } from './constants';
+import { ZONES, ZONES_TO_PINS, ZONE_TYPES, TYPES_TO_ACCESSORIES, ALARM_NAMES_TO_NUMBERS } from './constants';
 import { PanelObjectInterface, RuntimeCacheInterface } from './interfaces';
 // import { ReplaceCircular } from './utilities';
+import { getErrorMessage } from './utilities';
 import { KonnectedPlatformAccessory } from './platformAccessory';
 
 import client from 'node-ssdp';      // for devices discovery
@@ -24,7 +25,7 @@ import { URL } from 'url';
  * - parse the user config
  * - retrieve existing accessories from cachedAccessories
  * - set up a listening server to listen for requests from the Konnected alarm panels
- * - set up 
+ * - set up
  * - discovery of Konnected alarm panels on the network
  * - add Konnected alarm panels to Homebridge config
  * - provision Konnected alarm panels with zones configured if assigned
@@ -484,13 +485,13 @@ export class KonnectedHomebridgePlatform implements DynamicPlatformPlugin {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(panelConfigurationPayload),
         });
-      } catch (error) {
+      } catch (error: any) {
         if (error.errno === 'ECONNRESET') {
           this.log.info(
             `The panel at ${url} has disconnected and is likely rebooting to apply new provisioning settings`
           );
         } else {
-          this.log.error(error);
+          this.log.error(getErrorMessage(error));
         }
       }
     };
@@ -602,6 +603,8 @@ export class KonnectedHomebridgePlatform implements DynamicPlatformPlugin {
               // put panelZone into the correct device type for the panel
               if (ZONE_TYPES.sensors.includes(configPanelZone.zoneType)) {
                 sensors.push(panelZone);
+              } else if (ZONE_TYPES.interface.includes(configPanelZone.zoneType)) {
+                sensors.push(panelZone);
               } else if (ZONE_TYPES.dht_sensors.includes(configPanelZone.zoneType)) {
                 dht_sensors.push(panelZone);
               } else if (ZONE_TYPES.ds18b20_sensors.includes(configPanelZone.zoneType)) {
@@ -612,7 +615,7 @@ export class KonnectedHomebridgePlatform implements DynamicPlatformPlugin {
             }
 
             // genereate unique ID for zone
-            const zoneUUID: string = this.api.hap.uuid.generate(panelShortUUID + '-' + configPanelZone.zoneNumber);
+            const zoneUUID: string = this.getZoneUUID(panelShortUUID, configPanelZone);
 
             // if there's a model in the panelObject, that means the panel is Pro
             const panelModel: string = 'model' in panelObject ? 'Pro' : 'V1-V2';
@@ -707,6 +710,20 @@ export class KonnectedHomebridgePlatform implements DynamicPlatformPlugin {
   }
 
   /**
+   * Generate a UUID based on the zone number
+   * @param panelShortUUID string shortened version of the panel UUID
+   * @param configPanelZone ConfigPlatformInterface platform configuration
+   * @returns uuid for this zone
+   */
+  private getZoneUUID(panelShortUUID: string, configPanelZone: any): string {
+    let suffix = configPanelZone.zoneNumber;
+    if (['out', 'out1', 'alarm2_out2'].includes('N' + configPanelZone.zoneNumber)) {
+      suffix += `-${configPanelZone.zoneType}`;
+    }
+    return this.api.hap.uuid.generate(`${panelShortUUID}-${suffix}`);
+  }
+
+  /**
    * Control the registration of panel zones as accessories in Homebridge (and HomeKit).
    *
    * @param panelShortUUID string  The panel short UUID for the panel of zones being passed in.
@@ -772,6 +789,8 @@ export class KonnectedHomebridgePlatform implements DynamicPlatformPlugin {
         );
 
         accessoriesToUpdateArray.push(existingAccessory);
+      } else if (ZONE_TYPES.interface.includes(panelZoneObject.zoneType)) {
+        this.log.debug(`Skipping interface zone: ${panelZoneObject.displayName}`);
       } else {
         // otherwise we're adding a new accessory
         this.log.info(`Adding new accessory: ${panelZoneObject.displayName} (${panelZoneObject.serialNumber})`);
@@ -821,7 +840,7 @@ export class KonnectedHomebridgePlatform implements DynamicPlatformPlugin {
       zoneState = JSON.stringify(inboundPayload.body);
     }
 
-    const zoneUUID = this.api.hap.uuid.generate(inboundPayload.params.id + '-' + panelZone);
+    const zoneUUID = this.getZoneUUID(inboundPayload.params.id, { zoneNumber: panelZone, zoneType: 'sensor' });
 
     const existingAccessory = this.accessories.find((accessory) => accessory.UUID === zoneUUID);
 
@@ -907,12 +926,39 @@ export class KonnectedHomebridgePlatform implements DynamicPlatformPlugin {
                 runtimeCacheAccessory.humi
               );
               break;
-
+            case 'Interface':
+              this.processInterfaceUpdate(runtimeCacheAccessory, resultStateValue);
+              break;
             default:
               break;
           }
         }
       });
+    }
+  }
+
+  /**
+   * Process updates to interface sensors by updating security system in homebridge
+   * @param accessory accessory object that was updated
+   * @param stateValue new value
+   */
+  processInterfaceUpdate(accessory: RuntimeCacheInterface, stateValue: boolean | number) {
+    this.log.debug(`Processing update for ${accessory.type}`);
+    let value = stateValue;
+    switch (accessory.type) {
+      case 'armed':
+        accessory.state = value;
+        value = value ? ALARM_NAMES_TO_NUMBERS.AWAY_ARM : ALARM_NAMES_TO_NUMBERS.DISARMED;
+        this.controlSecuritySystem(value);
+        break;
+      case 'triggered':
+        accessory.state = value;
+        value = value ? ALARM_NAMES_TO_NUMBERS.ALARM_TRIGGERED : ALARM_NAMES_TO_NUMBERS.DISARMED;
+        this.controlSecuritySystem(value);
+        break;
+      default:
+        this.log.error('Unknown accessory type: ', accessory);
+        break;
     }
   }
 
@@ -1106,7 +1152,7 @@ export class KonnectedHomebridgePlatform implements DynamicPlatformPlugin {
                     }
                   }
                 } catch (error) {
-                  this.log.error(error);
+                  this.log.error(getErrorMessage(error));
                 }
               };
               actuatePanelZone(panelEndpoint);
@@ -1135,12 +1181,31 @@ export class KonnectedHomebridgePlatform implements DynamicPlatformPlugin {
       }
     });
 
+    // if the security system was set to arm stay trigger the appropriate output
+    if (value === 0) {
+      this.accessoriesRuntimeCache.forEach((runtimeCacheAccessory) => {
+        if ('arm_stay' === runtimeCacheAccessory.type) {
+          this.actuateAccessory(runtimeCacheAccessory.UUID, true, null);
+        }
+      });
+    }
+
+    // if the security system was set to arm away trigger the appropriate output
+    if (value === 1) {
+      this.accessoriesRuntimeCache.forEach((runtimeCacheAccessory) => {
+        if ('arm_away' === runtimeCacheAccessory.type) {
+          this.actuateAccessory(runtimeCacheAccessory.UUID, true, null);
+        }
+      });
+    }
+
     // if the security system is turned off, turn beepers, sirens and strobes off
+    // and actuate any configured outputs
     if (value === 3) {
       clearTimeout(this.entryTriggerDelayTimerHandle);
       delete this.entryTriggerDelayTimerHandle;
       this.accessoriesRuntimeCache.forEach((runtimeCacheAccessory) => {
-        if (['beeper', 'siren', 'strobe'].includes(runtimeCacheAccessory.type)) {
+        if (['beeper', 'siren', 'strobe', 'arm_stay', 'arm_away'].includes(runtimeCacheAccessory.type)) {
           this.actuateAccessory(runtimeCacheAccessory.UUID, false, null);
         }
       });
